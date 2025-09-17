@@ -13,11 +13,6 @@ def call(Object arg = null) {
       int i = (p ?: '').lastIndexOf('/')
       i > 0 ? p.substring(0, i) : ''
     }
-    def shQ = { String s ->
-      if (s == null) return "''"
-      "'${s.replace(\"'\", \"'\\\\''\")}'"
-    }
-
     String dir = parentDir(out)
     if (dir) {
       sh "mkdir -p ${shQ(dir)}"
