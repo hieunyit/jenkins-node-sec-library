@@ -1,0 +1,27 @@
+@Library('jenkins-node-sec-library') _
+
+String reportsDir = 'reports'
+String dockerfilePath = 'Dockerfile'
+
+node {
+  checkout scm
+
+  stage('Install dependencies') {
+    sh 'npm ci'
+  }
+
+  snykImageScan dockerfile: dockerfilePath, output: "${reportsDir}/snyk-image.json"
+  trivyScan dockerfile: dockerfilePath, output: "${reportsDir}/trivy-report.json"
+  snykSca output: "${reportsDir}/snyk-sca.json"
+  snykCodeScan output: "${reportsDir}/snyk-code.sarif"
+  semgrepScan output: "${reportsDir}/semgrep.sarif"
+  npmAudit output: "${reportsDir}/npm-audit.sarif"
+  retireJsScan output: "${reportsDir}/retirejs.sarif"
+  gitleaksScan output: "${reportsDir}/gitleaks.sarif"
+  conftestDockerfile dockerfile: dockerfilePath, output: "${reportsDir}/dockerfile-policy.sarif"
+
+  stage('Archive reports') {
+    sh "mkdir -p ${reportsDir}"
+    archiveArtifacts artifacts: "${reportsDir}/**/*", allowEmptyArchive: true
+  }
+}
