@@ -4,6 +4,6 @@ def call(Map cfg = [:]) {
       gitleaks detect --source . --redact \\
       --report-format json \\
       --gitleaks-ignore-path . \\
-      --report-path ${ShellUtils.shellQuote(out)}
+      --report-path ${out}
     """
 }
