@@ -1,16 +1,28 @@
-import org.jenkinsci.nodesec.ShellUtils
-
-def call(Map cfg = [:]) {
-  runWithCatch('NPM Dependency Audit') {
-    String out = cfg.output ?: 'report/npm-audit-report.json'
-
-    String outputDir = ShellUtils.parentDir(out)
-    if (outputDir) {
-      sh "mkdir -p ${ShellUtils.shellQuote(outputDir)}"
+def call(Object arg = null) {
+    String out
+    if (arg instanceof CharSequence) {
+      out = arg.toString().trim()
+    } else if (arg instanceof Map) {
+      out = (arg.output as String)?.trim()
+    }
+    if (!out) {
+      String base = (env.REPORT_DIR ?: 'report').trim()
+      out = "${base}/npm-audit-report.json"
+    }
+    def parentDir = { String p ->
+      int i = (p ?: '').lastIndexOf('/')
+      i > 0 ? p.substring(0, i) : ''
+    }
+    def shQ = { String s ->
+      if (s == null) return "''"
+      "'${s.replace(\"'\", \"'\\\\''\")}'"
     }
 
-    sh """
-      npm audit --audit-level=high --json > ${ShellUtils.shellQuote(out)}
-    """
+    String dir = parentDir(out)
+    if (dir) {
+      sh "mkdir -p ${shQ(dir)}"
+    }
+
+    sh "npm audit --audit-level=high --json > ${shQ(out)}"
   }
 }
