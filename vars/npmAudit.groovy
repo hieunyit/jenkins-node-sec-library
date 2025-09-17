@@ -1,6 +1,5 @@
 def call(Object arg = null) {
   String out
-   String out
   if (arg instanceof CharSequence) {
     out = (arg as String)?.trim()
   } else if (arg instanceof Map) {
