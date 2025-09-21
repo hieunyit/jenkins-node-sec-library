@@ -1,18 +1,9 @@
-import org.jenkinsci.nodesec.ShellUtils
-
-def call(Map cfg = [:]) {
-  runWithCatch('Snyk Scan SCA') {
-    String out = cfg.output ?: 'report/snyk-sca.json'
-
-    String outputDir = ShellUtils.parentDir(out)
-    if (outputDir) {
-      sh "mkdir -p ${ShellUtils.shellQuote(outputDir)}"
+def call(String output = null, String tokenCredId = 'snyk') {
+    String outFile = output ?: "${env.REPORT_DIR ?: 'report'}/snyk-sca.json"
+    
+    sh "mkdir -p \"\$(dirname '${outFile}')\""
+    
+    withCredentials([string(credentialsId: tokenCredId, variable: 'SNYK_TOKEN')]) {
+        sh "snyk test --severity-threshold=high --json-file-output='${outFile}'"
     }
-
-    withCredentials([string(credentialsId: cfg.tokenCredId ?: 'snyk', variable: 'SNYK_TOKEN')]) {
-      sh """
-        snyk test --severity-threshold=high --json-file-output=${ShellUtils.shellQuote(out)}
-      """
-    }
-  }
 }
