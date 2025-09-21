@@ -1,16 +1,10 @@
-import org.jenkinsci.nodesec.ShellUtils
-
-def call(Map cfg = [:]) {
-  runWithCatch('retire.js scan Dependency') {
-    String out = cfg.output ?: 'report/retire-report.json'
-
-    String outputDir = ShellUtils.parentDir(out)
-    if (outputDir) {
-      sh "mkdir -p ${ShellUtils.shellQuote(outputDir)}"
+def call(String output = null) {
+    runWithCatch('retire.js scan Dependency') {
+        String outFile = output ?: "${env.REPORT_DIR ?: 'report'}/retire-report.json"
+        
+        sh """
+            mkdir -p "\$(dirname '${outFile}')"
+            retire --severity high --path . --outputformat json --outputpath '${outFile}'
+        """
     }
-
-    sh """
-      retire --severity high --path . --outputformat json --outputpath ${ShellUtils.shellQuote(out)}
-    """
-  }
 }
