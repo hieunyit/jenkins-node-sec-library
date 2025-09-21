@@ -1,6 +1,6 @@
 def call(String output = null, String dockerfile = 'Dockerfile') {
     String outFile = output ?: "${env.REPORT_DIR ?: 'report'}/trivy-report.json"
-    String awkFile = '.jenkins-awk-extract-image.awk'
+    String awkFile = '.awk-extract-image.awk'
     
     sh "mkdir -p \"\$(dirname '${outFile}')\""
     
