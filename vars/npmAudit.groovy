@@ -9,6 +9,5 @@ def call(Object arg = null) {
     String base = (env.REPORT_DIR ?: 'report').trim()
     out = "${base}/npm-audit-report.json"
   }
-  sh "pwd && ls -al"
-  sh "npm audit --audit-level=high --json > ${out}"
+  sh "npm audit --audit-level=critical --json > ${out}"
 }
