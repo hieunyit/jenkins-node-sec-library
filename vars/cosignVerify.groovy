@@ -1,12 +1,12 @@
 def call(Object arg = null) {
     String keyCredId = 'cosign-public-key'
-    String imageTag = '${GIT_COMMIT}'
+    String imageTag = '${env.GIT_COMMIT}'
     
     if (arg instanceof CharSequence) {
         imageTag = arg.toString().trim()
     } else if (arg instanceof Map) {
         keyCredId = arg.keyCredId ?: 'cosign-public-key'
-        imageTag = arg.imageTag ?: '${GIT_COMMIT}'
+        imageTag = arg.imageTag ?: '${env.GIT_COMMIT}'
     }
     
     withCredentials([file(credentialsId: keyCredId, variable: 'COSIGN_PUBLIC_KEY')]) {
