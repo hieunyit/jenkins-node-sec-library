@@ -1,25 +1,24 @@
-def call(String output = null, String owaspInstallation = null) {
+def call(String owaspInstallation = null) {
   // Validate OWASP installation parameter
   if (!owaspInstallation) {
     error """
 owaspInstallation parameter is required for OWASP Dependency Check.
 Please provide the OWASP Dependency Check tool installation name configured in Jenkins.
-Example: call(owaspInstallation: 'OWASP-DepCheck-v7')
+Example: owaspInstallation('OWASP-DepCheck-12')
 """
   }
   
-  String reportDir = output ?: "${env.REPORT_DIR ?: 'report'}"
   
   // Create report directory
-  sh "mkdir -p ${reportDir}"
+  sh "mkdir -p report"
   
   try {
     dependencyCheck(
-      additionalArguments: "--scan ./ --out ./${reportDir} --format ALL --exclude '**/test/files/**' --disableArchive --prettyPrint",
+      additionalArguments: "--scan ./ --out ./report --format ALL --exclude '**/test/files/**' --disableArchive --prettyPrint",
       odcInstallation: owaspInstallation
     )
     echo "OWASP Dependency Check completed successfully using installation: ${owaspInstallation}"
-    echo "Reports saved to: ${reportDir}"
+    echo "Reports saved to: report"
   } catch (Exception e) {
     if (e.getMessage().contains("No tool named") || e.getMessage().contains("not found")) {
       error """
