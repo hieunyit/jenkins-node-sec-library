@@ -1,17 +1,16 @@
-def call(String output = null, String dockerfile = null) {
+def call(String dockerfile = null) {
     // Validate required parameter
     if (!dockerfile) {
         error """
 dockerfile parameter is required for Trivy scan.
 Please provide the path to Dockerfile.
-Example: call(dockerfile: 'Dockerfile')
+Example: trivyScan('Dockerfile')
 """
     }
-    
-    String outFile = output ?: "${env.REPORT_DIR ?: 'report'}/trivy-report.json"
+
     String awkFile = '.awk-extract-image.awk'
 
-    sh "mkdir -p \"\$(dirname '${outFile}')\""
+    sh "mkdir -p report"
 
     sh "test -f '${dockerfile}' || (echo 'Dockerfile not found: ${dockerfile}' && exit 1)"
     
@@ -25,11 +24,11 @@ Example: call(dockerfile: 'Dockerfile')
                 exit 1
             fi
             echo "Scanning Docker image with Trivy: \${dockerImageName}"
-            trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --no-progress --quiet -f json -o '${outFile}' "\${dockerImageName}"
+            trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --no-progress --quiet -f json -o report/trivy-report.json "\${dockerImageName}"
         """
         echo "Trivy scan completed successfully"
         echo "Dockerfile: ${dockerfile}"
-        echo "Report saved to: ${outFile}"
+        echo "Report saved to: report/trivy-report.json"
     } catch (Exception e) {
         if (e.getMessage().contains("trivy: command not found") || e.getMessage().contains("trivy: not found")) {
             error """
