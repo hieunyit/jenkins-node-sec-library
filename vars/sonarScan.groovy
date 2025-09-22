@@ -1,4 +1,4 @@
-def call(Map cfg = [:]) {
+def call(String projectKey = null, String sonarServer = null) {
     if (!projectKey) {
         error """
 projectKey parameter is required for SonarQube scan.
