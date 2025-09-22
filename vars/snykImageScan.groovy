@@ -1,9 +1,9 @@
-def call(String output = null, String snykTokenCredId = null) {
+def call(String snykTokenCredId = null) {
     if (!snykTokenCredId) {
         error """
 snykTokenCredId parameter is required for Snyk Container scan.
 Please provide the Snyk token credential ID configured in Jenkins.
-Example: call(snykTokenCredId: 'snyk-token')
+Example: snykImageScan('snyk-token')
 """
     }
     
@@ -15,7 +15,6 @@ Example: call(dockerfile: 'Dockerfile', snykTokenCredId: 'snyk-token')
 """
     }
     
-    String outFile = output ?: "${env.REPORT_DIR ?: 'report'}/snyk-container.json"
     String awkFile = '.jenkins-awk-extract-image.awk'
     sh "mkdir -p \"\$(dirname '${outFile}')\""
     sh "test -f '${dockerfile}' || (echo 'Dockerfile not found: ${dockerfile}' && exit 1)"
@@ -31,12 +30,12 @@ Example: call(dockerfile: 'Dockerfile', snykTokenCredId: 'snyk-token')
                     exit 1
                 fi
                 echo "Scanning Docker image: \${dockerImageName}"
-                snyk container test --severity-threshold=high --json-file-output='${outFile}' "\${dockerImageName}"
+                snyk container test --severity-threshold=high --json-file-output=report/snyk-container.json "\${dockerImageName}"
             """
         }
         echo "Snyk Container scan completed successfully using credential: ${snykTokenCredId}"
         echo "Dockerfile: ${dockerfile}"
-        echo "Report saved to: ${outFile}"
+        echo "Report saved to: report/snyk-container.json}"
     } catch (Exception e) {
         if (e.getMessage().contains("Credentials") || e.getMessage().contains("not found")) {
             error """
