@@ -4,7 +4,7 @@ def call(String imageName = null, String imageTag = null, String cosignPubKeyCre
         error """
 cosignPubKeyCredId parameter is required for Cosign Verify Image.
 Please provide the Cosign Public Key credential ID.
-Example: call(imageName: 'my-app', imageTag: 'v1.0.0', cosignPubKeyCredId: 'cosign-public-key')
+Example: cosignVerify('my-app', 'v1.0.0', 'cosign-public-key')
 """
     }
     
