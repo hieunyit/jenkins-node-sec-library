@@ -1,7 +1,13 @@
-def call(String imageName = null, String imageTag = null, String keyCredId = 'cosign-public-key') {
+def call(String imageName = null, String imageTag = null, String keyCredId = null) {
     String image = imageName ?: env.IMAGE_NAME
     String tag = imageTag ?: env.VERSION
-    
+    if (!cosignKeyPubCredId) {
+        error """
+cosignPubKeyCredId parameter is required for Cosign Verify Image.
+Please provide the Cosign Public Key.
+Example: call(cosignPubKeyCredId: 'cosignpublic-key')
+"""
+    }
     if (!image) {
         error "IMAGE_NAME must be provided or set as environment variable"
     }
@@ -9,7 +15,7 @@ def call(String imageName = null, String imageTag = null, String keyCredId = 'co
         error "VERSION must be provided or set as environment variable"
     }
     
-    withCredentials([file(credentialsId: keyCredId, variable: 'COSIGN_PUBLIC_KEY')]) {
+    withCredentials([file(credentialsId: cosignKeyPubCredId, variable: 'COSIGN_PUBLIC_KEY')]) {
         sh """
             echo "🔍 Verifying image: ${image}:${tag}"
             
