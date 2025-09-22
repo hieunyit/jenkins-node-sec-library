@@ -16,7 +16,7 @@ Example: call(dockerfile: 'Dockerfile', snykTokenCredId: 'snyk-token')
     }
     
     String awkFile = '.jenkins-awk-extract-image.awk'
-    sh "mkdir -p \"\$(dirname '${outFile}')\""
+    sh "mkdir -p report"
     sh "test -f '${dockerfile}' || (echo 'Dockerfile not found: ${dockerfile}' && exit 1)"
     
     writeFile file: awkFile, text: libraryResource('utils/awk-extract-image.awk')
