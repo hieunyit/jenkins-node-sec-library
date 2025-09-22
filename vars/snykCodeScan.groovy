@@ -6,8 +6,7 @@ Please provide the Snyk token credential ID configured in Jenkins.
 Example: snykCodeScan('snyk-token')
 """
     }
-    
-    String outFile = output ?: "${env.REPORT_DIR ?: 'report'}/snyk-code.json"
+
     sh "mkdir -p report"
     
     try {
