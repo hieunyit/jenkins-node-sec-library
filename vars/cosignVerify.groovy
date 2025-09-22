@@ -1,4 +1,4 @@
-def call(String imageName = null, String imageTag = null, String keyCredId = null) {
+def call(Map cfg = [:]) {
     String image = imageName ?: env.IMAGE_NAME
     String tag = imageTag ?: env.VERSION
     if (!cosignKeyPubCredId) {
