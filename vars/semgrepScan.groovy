@@ -1,7 +1,6 @@
-def call(String output = null) {
-  String outFile = output ?: "${env.REPORT_DIR ?: 'report'}/semgrep-report.json"
+def call() {
   sh """
-    mkdir -p "\$(dirname '${outFile}')"
+    mkdir -p report
     semgrep scan \\
       --config p/owasp-top-ten \\
       --config p/security-audit \\
@@ -11,6 +10,6 @@ def call(String output = null) {
       --exclude node_modules --exclude dist --exclude build --exclude coverage --exclude .git \\
       --timeout 10 \\
       --error \\
-      --json --json-output='${outFile}'
+      --json --json-output=report/semgrep-report.json
   """
 }
