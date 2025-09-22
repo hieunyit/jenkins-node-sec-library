@@ -1,5 +1,5 @@
 def call(String output = null, String owaspInstallation = null) {
-  String owaspInstallation = (cfg.owaspInstallation as String)
+  String owaspInstallation = owaspInstallation ?: env.OWASP_INSTALLATION
   String reportDir = output ?: "${env.REPORT_DIR ?: 'report'}"
   if (!owaspInstallation) {
     error """
