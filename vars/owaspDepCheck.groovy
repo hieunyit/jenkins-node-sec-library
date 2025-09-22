@@ -4,7 +4,7 @@ def call(String owaspInstallation = null) {
     error """
 owaspInstallation parameter is required for OWASP Dependency Check.
 Please provide the OWASP Dependency Check tool installation name configured in Jenkins.
-Example: owaspInstallation('OWASP-DepCheck-12')
+Example: owaspDepCheck('OWASP-DepCheck-12')
 """
   }
   
