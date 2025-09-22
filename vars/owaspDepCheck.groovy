@@ -1,7 +1,7 @@
 def call(String output = null, String owaspInstallation = null) {
-  String owaspInstallation = cfg.owaspInstallation ?: env.OWASP_INSTALLATION
+  String odc = owaspInstallation ?: env.OWASP_INSTALLATION
   String reportDir = output ?: "${env.REPORT_DIR ?: 'report'}"
-  if (!owaspInstallation) {
+  if (!odc) {
     error """
 owaspInstallation parameter is required for OWASP Dependency Check.
 Please provide the OWASP Dependency Check tool installation name configured in Jenkins.
