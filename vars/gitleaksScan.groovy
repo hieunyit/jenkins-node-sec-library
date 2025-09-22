@@ -1,10 +1,9 @@
-def call(String output = null) {
-    String outFile = output ?: "${env.REPORT_DIR ?: 'report'}/gitleaks-report.json"
+def call() {
     sh """
-        mkdir -p "\$(dirname '${outFile}')"
+        mkdir -p report
         gitleaks detect --source . --redact \\
           --report-format json \\
           --gitleaks-ignore-path . \\
-          --report-path '${outFile}'
+          --report-path report/gitleaks-report.json
     """
 }
