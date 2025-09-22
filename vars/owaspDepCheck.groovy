@@ -1,5 +1,5 @@
 def call(Map cfg = [:]) {
-  if (!owaspInstallation) {
+  if (!cfg.owaspInstallation) {
     error """
 owaspInstallation parameter is required for OWASP Dependency Check.
 Please provide the OWASP Dependency Check tool installation name configured in Jenkins.
