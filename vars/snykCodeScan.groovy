@@ -1,4 +1,4 @@
-def call(String output = null, String snykTokenCredId = null) {
+def call(Map cfg = [:]) {
     if (!snykTokenCredId) {
         error """
 snykTokenCredId parameter is required for Snyk Code scan.
