@@ -1,4 +1,6 @@
 def call(String output = null, String owaspInstallation = null) {
+  String owaspInstallation = (cfg.owaspInstallation as String)
+  String reportDir = output ?: "${env.REPORT_DIR ?: 'report'}"
   if (!owaspInstallation) {
     error """
 owaspInstallation parameter is required for OWASP Dependency Check.
@@ -6,7 +8,6 @@ Please provide the OWASP Dependency Check tool installation name configured in J
 Example: call(owaspInstallation: 'OWASP-DepCheck-v7')
 """
   }
-  String reportDir = output ?: "${env.REPORT_DIR ?: 'report'}"
   
   sh "mkdir -p ${reportDir}"
   
