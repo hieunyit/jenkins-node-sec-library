@@ -1,4 +1,4 @@
-def call(String output = null, String owaspInstallation = null) {
+def call(Map cfg = [:]) {
   if (!owaspInstallation) {
     error """
 owaspInstallation parameter is required for OWASP Dependency Check.
