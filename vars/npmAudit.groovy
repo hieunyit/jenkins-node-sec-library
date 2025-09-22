@@ -1,7 +1,6 @@
-def call(String output = null) {
-  String outFile = output ?: "${env.REPORT_DIR ?: 'report'}/npm-audit-report.json"
+def call() {
   sh """
-    mkdir -p "\$(dirname '${outFile}')"
-    npm audit --audit-level=critical --json > ${outFile}
+    mkdir -p report
+    npm audit --audit-level=critical --json > report/npm-audit-report.json
   """
 }
