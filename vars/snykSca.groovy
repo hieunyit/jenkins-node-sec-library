@@ -1,24 +1,22 @@
-def call(String output = null, String snykTokenCredId = null) {
+def call(String snykTokenCredId = null) {
     // Validate Snyk token credential ID parameter
     if (!snykTokenCredId) {
         error """
 snykTokenCredId parameter is required for Snyk SCA scan.
 Please provide the Snyk token credential ID configured in Jenkins.
-Example: snykSCA(null, 'snyk-token')
+Example: snykSCA( 'snyk-token')
 """
     }
     
-    String outFile = output ?: "${env.REPORT_DIR ?: 'report'}/snyk-sca.json"
-    
     // Create output directory
-    sh "mkdir -p \"\$(dirname '${outFile}')\""
+    sh "mkdir -p report"
     
     try {
         withCredentials([string(credentialsId: snykTokenCredId, variable: 'SNYK_TOKEN')]) {
-            sh "snyk test --severity-threshold=high --json-file-output='${outFile}'"
+            sh "snyk test --severity-threshold=high --json-file-output=report/snyk-sca.json"
         }
         echo "Snyk SCA scan completed successfully using credential: ${snykTokenCredId}"
-        echo "Report saved to: ${outFile}"
+        echo "Report saved to: report/snyk-sca.json"
     } catch (Exception e) {
         if (e.getMessage().contains("Credentials") || e.getMessage().contains("not found")) {
             error """
