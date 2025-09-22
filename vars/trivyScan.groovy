@@ -1,4 +1,4 @@
-def call(Map cfg = [:]) {
+def call(String output = null, String dockerfile = null) {
     // Validate required parameter
     if (!dockerfile) {
         error """
