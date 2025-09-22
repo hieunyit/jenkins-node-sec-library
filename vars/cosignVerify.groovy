@@ -1,23 +1,24 @@
-def call(Object arg = null) {
-    String keyCredId = 'cosign-public-key'
-    String imageTag = '${env.VERSION}'
+def call(String imageName = null, String imageTag = null, String keyCredId = 'cosign-public-key') {
+    String image = imageName ?: env.IMAGE_NAME
+    String tag = imageTag ?: env.VERSION
     
-    if (arg instanceof CharSequence) {
-        imageTag = arg.toString().trim()
-    } else if (arg instanceof Map) {
-        keyCredId = arg.keyCredId ?: 'cosign-public-key'
-        imageTag = arg.imageTag ?: '${env.VERSION}'
+    if (!image) {
+        error "IMAGE_NAME must be provided or set as environment variable"
+    }
+    if (!tag) {
+        error "VERSION must be provided or set as environment variable"
     }
     
     withCredentials([file(credentialsId: keyCredId, variable: 'COSIGN_PUBLIC_KEY')]) {
-        sh '''
-            if cosign verify --key $COSIGN_PUBLIC_KEY ${IMAGE_NAME}:${imageTag} > /dev/null; then
-                echo "✅ Cosign verify OK: ${IMAGE_NAME}:${imageTag}"
-                exit 0
+        sh """
+            echo "🔍 Verifying image: ${image}:${tag}"
+            
+            if cosign verify --key \$COSIGN_PUBLIC_KEY '${image}:${tag}' > /dev/null; then
+                echo "✅ Cosign verify OK: ${image}:${tag}"
             else
-                echo "❌ Cosign verify FAILED: ${IMAGE_NAME}:${imageTag}"
+                echo "❌ Cosign verify FAILED: ${image}:${tag}"
                 exit 1
             fi
-        '''
+        """
     }
 }
