@@ -20,7 +20,7 @@ def call(Object arg = null) {
         sh """
             DIGEST=\$(cat '${digestFile}')
             cosign sign -y --key \$COSIGN_KEY '${imageName}@'\$DIGEST
-            cosign clean -y '${imageName}:'\$DIGEST.sig
+            cosign clean '${imageName}:'\$DIGEST.sig
         """
     }
 }
