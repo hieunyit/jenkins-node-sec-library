@@ -27,7 +27,7 @@ Make sure the credential ID matches exactly: '${snykTokenCredId}'
     }
 }
 
-def imageScan(String snykTokenCredId = null) {
+def imageScan(String snykTokenCredId = null, String dockerfile = null) {
     if (!snykTokenCredId) {
         error """
 snykTokenCredId parameter is required for Snyk Container scan.
