@@ -1,10 +1,37 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+Unified Vulnerability Report Aggregator
+
+Usage:
+  python vuln_report.py <file1> [<file2> ...] [OPTIONS]
+
+Options:
+  --output-html=FILE       Export HTML report
+  --output-json=FILE       Export JSON report
+  --quiet, -q              Suppress console output
+  --ref-mode=MODE          Reference mode: auto|fileline|package
+  --ref-path=MODE          Path format: full|base|tailN (e.g., tail2)
+  --ref-width=N            Max width for reference column in console output
+  --only-tools=LIST        Filter by tools (comma-separated)
+  --include=PATTERN        Include pattern (regex, applies to title/ref)
+  --exclude=PATTERN        Exclude pattern (regex, applies to title/ref)
+  --no-color               Disable colored console output
+  --no-skip-empty          Do NOT skip files with 0 findings
+  --no-dedupe              Disable deduplication (keep duplicates)
+  --no-dedupe-cve          Do NOT dedupe by CVE/component (still dedupe exact)
+
+Supported formats (auto-detected): SARIF, Dependency-Check JSON, RetireJS, npm audit JSON,
+Gitleaks JSON, Semgrep JSON, Trivy JSON, Snyk JSON (OSS/Container)
+"""
+
 import json, sys, re, datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+# ANSI colors (auto-disabled if not TTY or --no-color)
 RESET=""; BOLD=""; DIM=""; RED=""; YELLOW=""; BLUE=""; MAGENTA=""; CYAN=""; GREEN=""
+
 def _enable_color(enable: bool):
     global RESET,BOLD,DIM,RED,YELLOW,BLUE,MAGENTA,CYAN,GREEN
     if enable and sys.stdout.isatty():
@@ -22,7 +49,7 @@ def norm_sev(s: Optional[str]) -> str:
     s = SEV_ALIAS.get(s, s)
     return s if s in SEV_ORDER else "unknown"
 
-def cut(s: str, n: Optional[int]) -> str:
+def cut(s: Optional[str], n: Optional[int]) -> str:
     if s is None: return ""
     s = str(s).replace("\n"," ").replace("\r"," ")
     if not n: return s
@@ -30,7 +57,8 @@ def cut(s: str, n: Optional[int]) -> str:
 
 def load_json(path: Path) -> Any:
     txt = path.read_text(encoding="utf-8", errors="ignore")
-    try: return json.loads(txt)
+    try:
+        return json.loads(txt)
     except Exception:
         txt = txt.lstrip("\ufeff")
         return json.loads(txt)
@@ -61,6 +89,7 @@ def detect_format(obj: Any, path: Path) -> str:
     return "unknown"
 
 # ---------------- Helpers ----------------
+
 def path_tail(s: str, depth: int) -> str:
     if not s: return ""
     s = s.replace("\\", "/")
@@ -81,9 +110,9 @@ def format_path(s: str, ref_path_mode: str, tail_depth: int) -> str:
 def build_ref(f: Dict[str, Any], ref_mode: str, ref_path_mode: str, tail_depth: int) -> str:
     """
     ref_mode:
-      - auto: package@version cho dependency; file[:line] cho code
-      - fileline: luôn file[:line] (nếu có)
-      - package: luôn component (nếu có)
+      - auto: package@version for dependency; file[:line] for code
+      - fileline: always file[:line] (if available)
+      - package: always component (if available)
     ref_path_mode: full | base | tailN (tail_depth = N)
     """
     comp = (f.get("component") or "").strip()
@@ -105,8 +134,9 @@ def build_ref(f: Dict[str, Any], ref_mode: str, ref_path_mode: str, tail_depth: 
     return fileline()
 
 # ---------------- Parsers ----------------
+
 def parse_sarif(obj: Dict[str,Any], source: str) -> Iterable[Dict[str,Any]]:
-    rules_index = {}
+    rules_index: Dict[str, Dict[str,Any]] = {}
     for run in obj.get("runs", []):
         tool = (run.get("tool", {}).get("driver", {}) or {}).get("name", "SARIF")
         for rule in (run.get("tool", {}).get("driver", {}).get("rules") or []):
@@ -186,7 +216,7 @@ def parse_trivy(obj: Dict[str,Any], source: str) -> Iterable[Dict[str,Any]]:
             inst = v.get("InstalledVersion") or v.get("PkgVersion") or ""
             comp = f"{pkg}@{inst}" if pkg else inst
             yield {"tool":"trivy","source":source,"id":vid,"title":v.get("Title") or vid,"severity":sev,"component":comp,
-                   "file":target,"line":None,"url":v.get("PrimaryURL") or "","cve": vid if vid.startswith(("CVE-","GHSA-")) else "","cwe":""}
+                   "file":target,"line":None,"url":v.get("PrimaryURL") or "","cve": vid if str(vid).upper().startswith(("CVE-","GHSA-")) else "","cwe":""}
         # Misconfigurations / Secrets
         for m in result.get("Misconfigurations") or []:
             sev=norm_sev(m.get("Severity"))
@@ -212,7 +242,6 @@ def parse_dependency_check(obj: Dict[str,Any], source: str) -> Iterable[Dict[str
 def parse_snyk(obj: Dict[str, Any], source: str) -> Iterable[Dict[str, Any]]:
     """
     Snyk JSON: vulnerabilities[]
-    Ref = package@version (dependency style). CVE lấy từ identifiers.CVE[].
     """
     for v in obj.get("vulnerabilities") or []:
         sev = norm_sev(v.get("severity"))
@@ -229,7 +258,7 @@ def parse_snyk(obj: Dict[str, Any], source: str) -> Iterable[Dict[str, Any]]:
             if isinstance(idf.get("CWE"), list): cwe_list = [str(x) for x in idf.get("CWE") if x]
         cve = ",".join(sorted(set(cve_list)))
         cwe = ",".join(sorted(set(cwe_list)))
-        # từ "from" giữ vào file để tra nguồn (image/layer), Ref vẫn là comp
+        # from -> target/image/layer trail (store in file field)
         target = ""
         frm = v.get("from") or []
         if isinstance(frm, list) and frm:
@@ -260,14 +289,22 @@ PARSERS = {
     "snyk": parse_snyk,
 }
 
-def human_now(): return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-def print_header(t,w): print(f"{BOLD}{t}{RESET}"); print(f"{DIM}{'─'*min(w,120)}{RESET}")
-def colfit(t,w): t=t or ""; return t+" "*(w-len(t)) if (w and len(t)<=w) else (t if not w else t[:w-1]+"…")
+def human_now() -> str: 
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def table(rows,hdrs,w):
-    # Cột: Tool | Severity | CVE | Title | Ref (Ref mặc định KHÔNG cắt)
+def print_header(t: str, w: int):
+    print(f"{BOLD}{t}{RESET}")
+    # Use ASCII dashes to avoid mojibake on some consoles
+    print(f"{DIM}{'-'*min(w,120)}{RESET}")
+
+def colfit(t: str, w: int) -> str:
+    t=t or ""
+    return t+" "*(w-len(t)) if (w and len(t)<=w) else (t if not w else t[:w-1]+"…")
+
+def table(rows: List[Tuple[str,str,str,str,str]], hdrs: List[str], w: int):
+    # Columns: Tool | Severity | CVE | Title | Ref (Ref optionally cut by --ref-width)
     tool_w, sev_w, cve_w, title_w = 12, 8, 16, 68
-    # Nếu tổng > width: giảm title_w, Ref vẫn in full
+    # If total > width: reduce title_w, keep Ref full
     if w and (tool_w+sev_w+cve_w+title_w+8) > w:
         title_w = max(32, w - (tool_w+sev_w+cve_w+8))
     print(BOLD + " ".join([
@@ -278,7 +315,7 @@ def table(rows,hdrs,w):
         "Ref"
     ]) + RESET)
     print(DIM + " ".join([
-        "─"*tool_w, "─"*sev_w, "─"*cve_w, "─"*title_w, "─"*8
+        "-"*tool_w, "-"*sev_w, "-"*cve_w, "-"*title_w, "-"*8
     ]) + RESET)
     for r in rows:
         print(" ".join([
@@ -286,105 +323,401 @@ def table(rows,hdrs,w):
             colfit(str(r[1]), sev_w),
             colfit(str(r[2]), cve_w),
             colfit(str(r[3]), title_w),
-            str(r[4])  # Ref in full
+            str(r[4])  # Ref printed after optional external cut
         ]))
 
-def _match_filters(text, include_patterns, exclude_patterns):
+def _match_filters(text: str, include_patterns: List[str], exclude_patterns: List[str]) -> bool:
     s = text or ''
     for pat in exclude_patterns:
-        if re.search(pat, s): return False
-    if include_patterns: return any(re.search(p, s) for p in include_patterns)
+        if re.search(pat, s, flags=re.I): return False
+    if include_patterns:
+        return any(re.search(p, s, flags=re.I) for p in include_patterns)
     return True
 
+# ---------------- Report generators ----------------
+
+def generate_html_report(findings: List[Dict[str, Any]], summary: Dict[str, int], 
+                         ref_mode: str, ref_path_mode: str, ref_tail_depth: int) -> str:
+    """Generate HTML vulnerability report"""
+    severity_colors = {
+        "critical": "#dc2626",
+        "high": "#ea580c", 
+        "medium": "#d97706",
+        "low": "#65a30d",
+        "info": "#0891b2",
+        "unknown": "#6b7280"
+    }
+    html_content = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vulnerability Report - {human_now()}</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; background: #f8fafc; }}
+  .container {{ max-width: 1200px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
+  .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 8px 8px 0 0; }}
+  .header h1 {{ margin: 0; font-size: 28px; font-weight: 600; }}
+  .header .meta {{ margin-top: 8px; opacity: 0.9; }}
+  .summary {{ padding: 30px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
+  .summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 20px; }}
+  .summary-card {{ background: white; padding: 20px; border-radius: 8px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
+  .summary-card .count {{ font-size: 24px; font-weight: 700; margin-bottom: 5px; }}
+  .summary-card .label {{ font-size: 12px; text-transform: uppercase; font-weight: 600; color: #64748b; }}
+  .content {{ padding: 30px; }}
+  .table-container {{ overflow-x: auto; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #e2e8f0; }}
+  th {{ background: #f1f5f9; font-weight: 600; color: #475569; font-size: 14px; }}
+  .severity-badge {{ display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; color: white; }}
+  .tool-badge {{ background: #e2e8f0; color: #475569; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }}
+  .cve-link {{ color: #3b82f6; text-decoration: none; }}
+  .cve-link:hover {{ text-decoration: underline; }}
+  .ref-text {{ font-family: 'Monaco', 'Menlo', monospace; font-size: 12px; color: #64748b; }}
+  tr:hover {{ background: #f8fafc; }}
+  .empty-state {{ text-align: center; padding: 60px 20px; color: #64748b; }}
+  .empty-state .icon {{ font-size: 48px; margin-bottom: 16px; }}
+</style>
+</head>
+<body>
+  <div class="container"> 
+    <div class="header"> 
+      <h1>Vulnerability Report</h1>
+      <div class="meta">Generated on {human_now()}</div>
+    </div>
+    <div class="summary">
+      <div class="summary-grid">
+"""
+    # Add summary cards
+    total_findings = len(findings)
+    for severity in ["critical", "high", "medium", "low", "info", "unknown"]:
+        count = summary.get(severity, 0)
+        if count > 0 or severity in ["critical", "high", "medium"]:
+            color = severity_colors.get(severity, "#6b7280")
+            html_content += f"""
+        <div class="summary-card">
+          <div class="count" style="color: {color};">{count}</div>
+          <div class="label">{severity.upper()}</div>
+        </div>
+"""
+    html_content += f"""
+        <div class="summary-card">
+          <div class="count" style="color: #1f2937;">{total_findings}</div>
+          <div class="label">TOTAL</div>
+        </div>
+      </div>
+    </div>
+    <div class="content">
+"""
+    if findings:
+        html_content += """
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Tool</th>
+              <th>Severity</th>
+              <th>CVE</th>
+              <th>Title</th>
+              <th>Reference</th>
+            </tr>
+          </thead>
+          <tbody>
+"""
+        findings_sorted = sorted(findings, key=lambda x: (-SEV_ORDER.get(x.get("severity"), 0), x.get("cve", ""), x.get("tool", ""), x.get("title", "")))
+        severity_colors = {
+            "critical": "#dc2626",
+            "high": "#ea580c", 
+            "medium": "#d97706",
+            "low": "#65a30d",
+            "info": "#0891b2",
+            "unknown": "#6b7280"
+        }
+        for f in findings_sorted:
+            severity = f.get("severity", "unknown")
+            color = severity_colors.get(severity, "#6b7280")
+            ref_val = build_ref(f, ref_mode, ref_path_mode, ref_tail_depth)
+            cve_text = f.get("cve", "")
+            cve_display = ""
+            if cve_text:
+                if "," not in cve_text and cve_text.upper().startswith("CVE-"):
+                    cve_display = f'<a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name={cve_text}" class="cve-link" target="_blank" rel="noopener">{cve_text}</a>'
+                else:
+                    cve_display = cve_text
+            title = (f.get('title', '') or '').replace('<','&lt;').replace('>','&gt;')
+            ref_safe = (ref_val or '').replace('<','&lt;').replace('>','&gt;')
+            html_content += f"""
+            <tr>
+              <td><span class="tool-badge">{f.get('tool', '')}</span></td>
+              <td><span class="severity-badge" style="background-color: {color};">{severity.upper()}</span></td>
+              <td>{cve_display}</td>
+              <td>{title}</td>
+              <td><span class="ref-text">{ref_safe}</span></td>
+            </tr>
+"""
+        html_content += """
+          </tbody>
+        </table>
+      </div>
+"""
+    else:
+        html_content += """
+      <div class="empty-state"> 
+        <div class="icon">✅</div>
+        <h3>No vulnerabilities found</h3>
+        <p>All scanned files appear to be clean.</p>
+      </div>
+"""
+    html_content += """
+    </div>
+  </div>
+</body>
+</html>
+"""
+    return html_content
+
+def generate_json_report(findings: List[Dict[str, Any]], summary: Dict[str, int], metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate JSON vulnerability report"""
+    return {
+        "metadata": {
+            "generated_at": datetime.datetime.now().isoformat(),
+            "generator": "vuln_report.py",
+            "version": "2.0",
+            **metadata
+        },
+        "summary": {
+            "total_findings": len(findings),
+            "by_severity": summary,
+            "tools_used": sorted(list(set(f.get("tool", "") for f in findings if f.get("tool")))),
+            "sources_scanned": sorted(list(set(f.get("source", "") for f in findings if f.get("source"))))
+        },
+        "findings": findings
+    }
+
+# ---------------- Core helpers ----------------
+
+def _dedupe(findings: List[Dict[str, Any]], dedupe_cve: bool) -> List[Dict[str, Any]]:
+    """Dedupe findings, keeping the one with the highest severity rank.
+    - Always dedupe by full key (tool,id,title,component,file,line,cve)
+    - If dedupe_cve=True, also dedupe records that share (cve, component or id) to reduce noise
+    """
+    def sev_rank(f): return SEV_ORDER.get(f.get("severity"), 0)
+
+    # exact key dedupe first
+    best: Dict[Tuple[Any,...], Dict[str,Any]] = {}
+    for f in findings:
+        key = (
+            f.get("tool"), f.get("id"), f.get("title"), f.get("component"),
+            f.get("file"), f.get("line"), f.get("cve"),
+        )
+        if key not in best or sev_rank(f) > sev_rank(best[key]):
+            best[key] = f
+
+    deduped = list(best.values())
+
+    if not dedupe_cve:
+        return deduped
+
+    # secondary dedupe: by (CVE, component) if CVE exists; else by (id, component)
+    groups: Dict[Tuple[str,str], Dict[str,Any]] = {}
+    for f in deduped:
+        cve = str(f.get("cve") or "").strip()
+        comp = str(f.get("component") or "").strip()
+        if not cve and not comp:
+            continue
+        if cve:
+            key = (f"CVE:{cve}", comp)
+        else:
+            id_str = str(f.get("id") or "").strip()
+            key = (f"ID:{id_str}", comp)
+        g = groups.get(key)
+        if (g is None) or (sev_rank(f) > sev_rank(g)):
+            groups[key] = f
+
+    # keep one per group + keep entries with neither CVE nor component
+    selected = list(groups.values())
+    no_key_items = [
+        f for f in deduped
+        if (str(f.get("cve") or "").strip() == "" and str(f.get("component") or "").strip() == "")
+    ]
+    return selected + no_key_items
+
+def _summarize(findings: List[Dict[str, Any]]) -> Dict[str, int]:
+    summary: Dict[str, int] = {"critical":0, "high":0, "medium":0, "low":0, "info":0, "unknown":0}
+    for f in findings:
+        s = norm_sev(f.get("severity"))
+        summary[s] = summary.get(s, 0) + 1
+    return summary
+
+# ---------------- Main ----------------
+
 def main(argv: List[str]) -> int:
-    files=[]; max_width=120; color=True
-    include=[]; exclude=[]; only=set()
-    skip_empty=True; dedupe=True; dedupe_cve=True
-    ref_mode="auto"; ref_path_mode="tail"; ref_tail_depth=2
-    ref_width=None  # None => không cắt Ref
+    files: List[str] = []
+    max_width = 120
+    color = True
+    include: List[str] = []
+    exclude: List[str] = []
+    only: set = set()
+    skip_empty = True
+    dedupe = True
+    dedupe_cve = True
+    ref_mode = "auto"
+    ref_path_mode = "tail"
+    ref_tail_depth = 2
+    ref_width: Optional[int] = None  # None => do not cut Ref
+    output_html: Optional[str] = None
+    output_json: Optional[str] = None
+    quiet = False
+
+    # --- parse args ---
     for a in argv[1:]:
-        if a=="--no-color": color=False
-        elif a.startswith("--max-width="): max_width=int(a.split("=",1)[1])
+        if a == "--no-color": color = False
+        elif a in ("--quiet", "-q"): quiet = True
+        elif a.startswith("--max-width="): max_width = int(a.split("=",1)[1])
         elif a.startswith("--include="): include.append(a.split("=",1)[1])
         elif a.startswith("--exclude="): exclude.append(a.split("=",1)[1])
-        elif a.startswith("--only-tools="): only=set(t.strip().lower() for t in a.split("=",1)[1].split(",") if t.strip())
-        elif a=="--no-skip-empty": skip_empty=False
-        elif a=="--no-dedupe": dedupe=False
-        elif a=="--no-dedupe-cve": dedupe_cve=False
-        elif a.startswith("--ref-mode="): ref_mode=a.split("=",1)[1].strip().lower()
+        elif a.startswith("--only-tools="): only = set(t.strip().lower() for t in a.split("=",1)[1].split(",") if t.strip())
+        elif a == "--no-skip-empty": skip_empty = False
+        elif a == "--no-dedupe": dedupe = False
+        elif a == "--no-dedupe-cve": dedupe_cve = False
+        elif a.startswith("--ref-mode="): ref_mode = a.split("=",1)[1].strip().lower()
         elif a.startswith("--ref-path="):
-            val=a.split("=",1)[1].strip().lower()
-            if val=="full": ref_path_mode="full"
-            elif val=="base": ref_path_mode="base"
+            val = a.split("=",1)[1].strip().lower()
+            if val == "full": ref_path_mode = "full"
+            elif val == "base": ref_path_mode = "base"
             elif val.startswith("tail"):
-                ref_path_mode="tail"
+                ref_path_mode = "tail"
                 try:
-                    ref_tail_depth=int(val[4:]) if len(val)>4 else 2
-                except: ref_tail_depth=2
+                    ref_tail_depth = int(val[4:]) if len(val) > 4 else 2
+                except: ref_tail_depth = 2
         elif a.startswith("--ref-width="):
-            try: ref_width=int(a.split("=",1)[1])
-            except: ref_width=None
-        else: files.append(a)
+            try: ref_width = int(a.split("=",1)[1])
+            except: ref_width = None
+        elif a.startswith("--output-html="): output_html = a.split("=",1)[1]
+        elif a.startswith("--output-json="): output_json = a.split("=",1)[1]
+        else:
+            files.append(a)
+
     _enable_color(color)
+
     if not files:
-        print("Usage: python vuln_report.py <file1> [<file2> ...] "
-              "[--ref-mode=auto|fileline|package] [--ref-path=full|base|tailN] [--ref-width=N]")
+        print("Usage: python vuln_report.py <file1> [<file2> ...] [OPTIONS]")
+        print("\nOptions:")
+        print("  --output-html=FILE       Export HTML report")
+        print("  --output-json=FILE       Export JSON report")
+        print("  --quiet, -q              Suppress console output")
+        print("  --ref-mode=MODE          Reference mode: auto|fileline|package")
+        print("  --ref-path=MODE          Path format: full|base|tailN (e.g., tail2)")
+        print("  --ref-width=N            Max width for reference column")
+        print("  --only-tools=LIST        Filter by tools (comma-separated)")
+        print("  --include=PATTERN        Include pattern (regex)")
+        print("  --exclude=PATTERN        Exclude pattern (regex)")
+        print("  --no-color               Disable colored output")
+        print("  --no-skip-empty          Don't skip empty findings")
+        print("  --no-dedupe              Disable deduplication")
+        print("  --no-dedupe-cve          Disable CVE/component deduplication")
         return 1
 
-    findings=[]; seen=set(); errors=[]
-    for path in files:
-        p=Path(path)
-        if not p.exists(): errors.append(f"Missing: {path}"); continue
+    all_findings: List[Dict[str, Any]] = []
+
+    for fpath in files:
+        p = Path(fpath)
+        if not p.exists():
+            print(f"{YELLOW}Warning: file not found: {p}{RESET}")
+            continue
         try:
-            obj=load_json(p); fmt=detect_format(obj,p)
-            if fmt=="unknown": errors.append(f"Skip (unknown format): {path}"); continue
-            for f in PARSERS[fmt](obj, source=p.name):
-                f["severity"]=norm_sev(f.get("severity"))
-                if only and f.get("tool","").lower() not in only: continue
-                if skip_empty and (not f.get("title") or f["title"].strip().lower() in ("na","unknown","gitleaks","semgrep finding","trivy vulnerability","dependency-check finding","snyk vulnerability")):
-                    continue
-                blob=" ".join([str(f.get("title","")), str(f.get("cve","")), str(f.get("component","")), str(f.get("file",""))])
-                if not _match_filters(blob, include, exclude): continue
-                # Dedupe (ưu tiên theo CVE)
-                if dedupe and dedupe_cve and f.get("cve"):
-                    key=("CVE", f["cve"])
-                else:
-                    key=(f.get("tool",""), f.get("title",""), f.get("component",""), f.get("file",""), f.get("line"))
-                if dedupe and key in seen: continue
-                seen.add(key); findings.append(f)
+            obj = load_json(p)
         except Exception as e:
-            errors.append(f"Error: {path} -> {e}")
+            print(f"{RED}Error: cannot parse JSON from {p}: {e}{RESET}")
+            continue
+        fmt = detect_format(obj, p)
+        parser = PARSERS.get(fmt)
+        if not parser:
+            if not skip_empty and not quiet:
+                print_header(f"{p} — format: unknown (no findings)", max_width)
+            continue
+        findings = list(parser(obj, str(p)))
+        if not findings and skip_empty:
+            continue
+        # annotate the raw source file path
+        for it in findings:
+            it["source"] = str(p)
+            it["severity"] = norm_sev(it.get("severity"))
+        all_findings.extend(findings)
 
-    width=max_width
-    print_header(f"Aggregated Vulnerability Report • {human_now()}", width)
-    by_sev={}
-    for f in findings: by_sev[f["severity"]]=by_sev.get(f["severity"],0)+1
-    sev_line=[]
-    for s in ("critical","high","medium","low","info","unknown"):
-        if by_sev.get(s): sev_line.append(f"{s.upper()}:{by_sev[s]}")
-    print(" ".join(sev_line) if sev_line else "No issues")
+    # filter by tool
+    if only:
+        all_findings = [f for f in all_findings if (f.get("tool","")).lower() in only]
 
-    if findings:
-        print("\n")
-        headers=["Tool","Severity","CVE","Title","Ref"]
-        rows=[]
-        findings_sorted = sorted(findings, key=lambda x:(-SEV_ORDER.get(x["severity"],0), x.get("cve",""), x.get("tool",""), x.get("title","")))
-        for f in findings_sorted:
+    # apply include/exclude based on title or reference
+    if include or exclude:
+        filtered: List[Dict[str,Any]] = []
+        for f in all_findings:
+            ref = build_ref(f, ref_mode, ref_path_mode, ref_tail_depth)
+            hay = f"{f.get('title','')} | {ref}"
+            if _match_filters(hay, include, exclude):
+                filtered.append(f)
+        all_findings = filtered
+
+    # deduplication
+    if dedupe:
+        all_findings = _dedupe(all_findings, dedupe_cve=dedupe_cve)
+
+    # sort for output
+    all_findings.sort(key=lambda x: (-SEV_ORDER.get(x.get("severity"),0), x.get("cve",""), x.get("tool",""), x.get("title","")))
+
+    # summary
+    summary = _summarize(all_findings)
+
+    # console output
+    if not quiet:
+        header = f"Aggregated Vulnerability Report • {human_now()}"
+        print_header(header, max_width)
+        sev_line = f"CRITICAL:{summary['critical']} HIGH:{summary['high']} MEDIUM:{summary['medium']} LOW:{summary['low']} INFO:{summary['info']}"
+        print(sev_line)
+        print()
+        rows: List[Tuple[str,str,str,str,str]] = []
+        for f in all_findings:
             ref_val = build_ref(f, ref_mode, ref_path_mode, ref_tail_depth)
-            rows.append([
+            if ref_width:
+                ref_val = cut(ref_val, ref_width)
+            rows.append((
                 f.get("tool",""),
-                (f.get("severity","") or "").upper(),
-                cut(f.get("cve",""), 16),
-                cut(f.get("title",""), 90),
-                (cut(ref_val, ref_width) if ref_width else ref_val),  # mặc định: KHÔNG cắt Ref
-            ])
-        table(rows, headers, width)
+                (f.get("severity") or "").upper(),
+                f.get("cve",""),
+                f.get("title",""),
+                ref_val
+            ))
+        if rows:
+            table(rows, ["Tool","Severity","CVE","Title"], max_width)
+        else:
+            print(f"{GREEN}No findings after filters.{RESET}")
 
-    if errors:
-        print("\nNotes:")
-        for e in errors: print(" - " + e)
+    # outputs
+    if output_html:
+        html = generate_html_report(all_findings, summary, ref_mode, ref_path_mode, ref_tail_depth)
+        Path(output_html).write_text(html, encoding="utf-8")
+        if not quiet:
+            print(f"\n{GREEN}HTML report saved to: {output_html}{RESET}")
 
-    return 2 if (by_sev.get("critical",0) or by_sev.get("high",0)) else 0
+    if output_json:
+        meta = {
+            "arguments": [a for a in argv[1:]],
+            "ref_mode": ref_mode,
+            "ref_path_mode": ref_path_mode,
+            "ref_tail_depth": ref_tail_depth,
+        }
+        j = generate_json_report(all_findings, summary, meta)
+        Path(output_json).write_text(json.dumps(j, ensure_ascii=False, indent=2), encoding="utf-8")
+        if not quiet:
+            print(f"{GREEN}JSON report saved to: {output_json}{RESET}")
 
-if __name__=="__main__":
-    sys.exit(main(sys.argv))
+    return 0
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv))
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
+        sys.exit(130)
