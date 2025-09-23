@@ -17,7 +17,7 @@ def call(Map params = [:]) {
             echo "📁 Report Directory: ${reportDir}"
             echo "----------------------------------------"
             
-            ${pythonExecutable} '${scriptFile}' '${reportDir}'/*.sarif '${reportDir}'/*.json
+            ${pythonExecutable} '${scriptFile}' '${reportDir}'/*.sarif '${reportDir}'/*.json --output-html=report/repor-security.html  --output-json=report/repor-security.json
         """
         
         echo "✅ Security report aggregation completed"
