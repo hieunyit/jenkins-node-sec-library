@@ -1,8 +1,7 @@
-def call(String output = null, String dockerfile = 'Dockerfile', String policyDir = 'policy') {
-    String outFile = output ?: "${env.REPORT_DIR ?: 'report'}/opa-report.sarif"
+def call(String dockerfile = 'Dockerfile', String policyDir = 'policy') {
     
     sh """
-        mkdir -p "\$(dirname '${outFile}')"
-        conftest test --parser dockerfile -p '${policyDir}' '${dockerfile}' --output sarif > '${outFile}'
+        mkdir -p report
+        conftest test --parser dockerfile -p '${policyDir}' '${dockerfile}' --output sarif > report/opa-report.sarif
     """
 }
