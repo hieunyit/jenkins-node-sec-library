@@ -15,7 +15,7 @@ Example: call(projectKey: 'my-project', sonarServer: 'SonarQube-Server')
 """
     }
     
-    String exclusions = '**/test/**'
+    String exclusions = '**/test/**,**/tests/**,**/report/**,**/report/**'
     
     try {
         withSonarQubeEnv(sonarServer) {
