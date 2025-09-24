@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Unified Vulnerability Report Aggregator
+Enhanced Unified Vulnerability Report Aggregator with Interactive Filtering
 
 Usage:
   python vuln_report.py <file1> [<file2> ...] [OPTIONS]
 
 Options:
-  --output-html=FILE       Export HTML report
+  --output-html=FILE       Export interactive HTML report with filters
   --output-json=FILE       Export JSON report
   --quiet, -q              Suppress console output
   --ref-mode=MODE          Reference mode: auto|fileline|package
@@ -20,6 +20,15 @@ Options:
   --no-skip-empty          Do NOT skip files with 0 findings
   --no-dedupe              Disable deduplication (keep duplicates)
   --no-dedupe-cve          Do NOT dedupe by CVE/component (still dedupe exact)
+  --interactive            Enable interactive console filtering
+  --min-severity=LEVEL     Minimum severity level (critical|high|medium|low|info)
+
+New Features:
+  - Interactive HTML report with real-time filtering and search
+  - Advanced console filtering with --interactive mode
+  - Severity-based filtering
+  - Enhanced search capabilities
+  - Export filtered results
 
 Supported formats (auto-detected): SARIF, Dependency-Check JSON, RetireJS, npm audit JSON,
 Gitleaks JSON, Semgrep JSON, Trivy JSON, Snyk JSON (OSS/Container)
@@ -28,6 +37,7 @@ Gitleaks JSON, Semgrep JSON, Trivy JSON, Snyk JSON (OSS/Container)
 import json, sys, re, datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+import argparse
 
 # ANSI colors (auto-disabled if not TTY or --no-color)
 RESET=""; BOLD=""; DIM=""; RED=""; YELLOW=""; BLUE=""; MAGENTA=""; CYAN=""; GREEN=""
@@ -133,7 +143,7 @@ def build_ref(f: Dict[str, Any], ref_mode: str, ref_path_mode: str, tail_depth: 
         return comp
     return fileline()
 
-# ---------------- Parsers ----------------
+# ---------------- Parsers (unchanged from original) ----------------
 
 def parse_sarif(obj: Dict[str,Any], source: str) -> Iterable[Dict[str,Any]]:
     rules_index: Dict[str, Dict[str,Any]] = {}
@@ -294,7 +304,6 @@ def human_now() -> str:
 
 def print_header(t: str, w: int):
     print(f"{BOLD}{t}{RESET}")
-    # Use ASCII dashes to avoid mojibake on some consoles
     print(f"{DIM}{'-'*min(w,120)}{RESET}")
 
 def colfit(t: str, w: int) -> str:
@@ -302,9 +311,7 @@ def colfit(t: str, w: int) -> str:
     return t+" "*(w-len(t)) if (w and len(t)<=w) else (t if not w else t[:w-1]+"…")
 
 def table(rows: List[Tuple[str,str,str,str,str]], hdrs: List[str], w: int):
-    # Columns: Tool | Severity | CVE | Title | Ref (Ref optionally cut by --ref-width)
     tool_w, sev_w, cve_w, title_w = 12, 8, 16, 68
-    # If total > width: reduce title_w, keep Ref full
     if w and (tool_w+sev_w+cve_w+title_w+8) > w:
         title_w = max(32, w - (tool_w+sev_w+cve_w+8))
     print(BOLD + " ".join([
@@ -323,7 +330,7 @@ def table(rows: List[Tuple[str,str,str,str,str]], hdrs: List[str], w: int):
             colfit(str(r[1]), sev_w),
             colfit(str(r[2]), cve_w),
             colfit(str(r[3]), title_w),
-            str(r[4])  # Ref printed after optional external cut
+            str(r[4])
         ]))
 
 def _match_filters(text: str, include_patterns: List[str], exclude_patterns: List[str]) -> bool:
@@ -334,11 +341,179 @@ def _match_filters(text: str, include_patterns: List[str], exclude_patterns: Lis
         return any(re.search(p, s, flags=re.I) for p in include_patterns)
     return True
 
-# ---------------- Report generators ----------------
+# ---------------- New Filtering Functions ----------------
+
+def filter_by_severity(findings: List[Dict[str, Any]], min_severity: str) -> List[Dict[str, Any]]:
+    """Filter findings by minimum severity level"""
+    min_level = SEV_ORDER.get(min_severity.lower(), 0)
+    return [f for f in findings if SEV_ORDER.get(f.get("severity"), 0) >= min_level]
+
+def filter_by_search(findings: List[Dict[str, Any]], search_term: str) -> List[Dict[str, Any]]:
+    """Filter findings by search term (searches title, tool, component, file, cve)"""
+    if not search_term:
+        return findings
+    
+    pattern = re.compile(re.escape(search_term), re.I)
+    result = []
+    
+    for f in findings:
+        searchable_text = " ".join([
+            str(f.get("title", "")),
+            str(f.get("tool", "")),
+            str(f.get("component", "")),
+            str(f.get("file", "")),
+            str(f.get("cve", "")),
+            str(f.get("id", ""))
+        ])
+        
+        if pattern.search(searchable_text):
+            result.append(f)
+    
+    return result
+
+def interactive_filter_menu(findings: List[Dict[str, Any]], 
+                          ref_mode: str, ref_path_mode: str, ref_tail_depth: int, 
+                          max_width: int) -> List[Dict[str, Any]]:
+    """Interactive console menu for filtering findings"""
+    current_findings = findings[:]
+    
+    while True:
+        print(f"\n{BOLD}=== Interactive Filter Menu ==={RESET}")
+        print(f"Current findings: {len(current_findings)}")
+        
+        summary = _summarize(current_findings)
+        sev_line = f"CRITICAL:{summary['critical']} HIGH:{summary['high']} MEDIUM:{summary['medium']} LOW:{summary['low']} INFO:{summary['info']}"
+        print(sev_line)
+        
+        print(f"\n{BOLD}Options:{RESET}")
+        print("1. Search by keyword")
+        print("2. Filter by severity")
+        print("3. Filter by tool")
+        print("4. Show current results")
+        print("5. Reset filters")
+        print("6. Export current results")
+        print("0. Exit interactive mode")
+        
+        try:
+            choice = input(f"\n{CYAN}Enter choice (0-6): {RESET}").strip()
+            
+            if choice == "0":
+                break
+            elif choice == "1":
+                search_term = input(f"{CYAN}Enter search term: {RESET}").strip()
+                current_findings = filter_by_search(current_findings, search_term)
+                print(f"{GREEN}Filtered to {len(current_findings)} findings{RESET}")
+                
+            elif choice == "2":
+                print(f"{CYAN}Severity levels: critical, high, medium, low, info{RESET}")
+                min_sev = input(f"{CYAN}Enter minimum severity: {RESET}").strip().lower()
+                if min_sev in SEV_ORDER:
+                    current_findings = filter_by_severity(current_findings, min_sev)
+                    print(f"{GREEN}Filtered to {len(current_findings)} findings{RESET}")
+                else:
+                    print(f"{RED}Invalid severity level{RESET}")
+                    
+            elif choice == "3":
+                tools = sorted(set(f.get("tool", "") for f in current_findings if f.get("tool")))
+                print(f"{CYAN}Available tools: {', '.join(tools)}{RESET}")
+                tool_filter = input(f"{CYAN}Enter tool name: {RESET}").strip()
+                if tool_filter:
+                    current_findings = [f for f in current_findings if tool_filter.lower() in f.get("tool", "").lower()]
+                    print(f"{GREEN}Filtered to {len(current_findings)} findings{RESET}")
+                    
+            elif choice == "4":
+                if current_findings:
+                    show_findings_table(current_findings, ref_mode, ref_path_mode, ref_tail_depth, max_width)
+                else:
+                    print(f"{YELLOW}No findings to display{RESET}")
+                    
+            elif choice == "5":
+                current_findings = findings[:]
+                print(f"{GREEN}Filters reset. Back to {len(current_findings)} findings{RESET}")
+                
+            elif choice == "6":
+                filename = input(f"{CYAN}Enter filename (without extension): {RESET}").strip()
+                if filename:
+                    export_filtered_results(current_findings, filename, ref_mode, ref_path_mode, ref_tail_depth)
+                    
+        except KeyboardInterrupt:
+            print(f"\n{YELLOW}Exiting interactive mode...{RESET}")
+            break
+        except Exception as e:
+            print(f"{RED}Error: {e}{RESET}")
+    
+    return current_findings
+
+def show_findings_table(findings: List[Dict[str, Any]], ref_mode: str, ref_path_mode: str, 
+                       ref_tail_depth: int, max_width: int):
+    """Display findings in table format"""
+    if not findings:
+        print(f"{YELLOW}No findings to display{RESET}")
+        return
+        
+    # Sort by severity
+    findings_sorted = sorted(findings, key=lambda x: (-SEV_ORDER.get(x.get("severity"), 0), 
+                                                     x.get("cve", ""), 
+                                                     x.get("tool", ""), 
+                                                     x.get("title", "")))
+    
+    rows = []
+    for f in findings_sorted:
+        ref_val = build_ref(f, ref_mode, ref_path_mode, ref_tail_depth)
+        rows.append((
+            f.get("tool", ""),
+            (f.get("severity") or "").upper(),
+            f.get("cve", ""),
+            f.get("title", ""),
+            ref_val
+        ))
+    
+    table(rows, ["Tool", "Severity", "CVE", "Title", "Reference"], max_width)
+
+def export_filtered_results(findings: List[Dict[str, Any]], filename: str, 
+                          ref_mode: str, ref_path_mode: str, ref_tail_depth: int):
+    """Export filtered results to JSON and HTML"""
+    try:
+        # JSON export
+        json_filename = f"{filename}.json"
+        summary = _summarize(findings)
+        metadata = {
+            "generated_at": datetime.datetime.now().isoformat(),
+            "generator": "vuln_report.py (filtered)",
+            "total_findings": len(findings),
+            "ref_mode": ref_mode,
+            "ref_path_mode": ref_path_mode,
+            "ref_tail_depth": ref_tail_depth
+        }
+        
+        json_data = {
+            "metadata": metadata,
+            "summary": {
+                "total_findings": len(findings),
+                "by_severity": summary,
+                "tools_used": sorted(list(set(f.get("tool", "") for f in findings if f.get("tool")))),
+                "sources_scanned": sorted(list(set(f.get("source", "") for f in findings if f.get("source"))))
+            },
+            "findings": findings
+        }
+        
+        Path(json_filename).write_text(json.dumps(json_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"{GREEN}JSON exported to: {json_filename}{RESET}")
+        
+        # HTML export
+        html_filename = f"{filename}.html"
+        html_content = generate_html_report(findings, summary, ref_mode, ref_path_mode, ref_tail_depth)
+        Path(html_filename).write_text(html_content, encoding="utf-8")
+        print(f"{GREEN}HTML exported to: {html_filename}{RESET}")
+        
+    except Exception as e:
+        print(f"{RED}Export failed: {e}{RESET}")
+
+# ---------------- Enhanced HTML Report Generator ----------------
 
 def generate_html_report(findings: List[Dict[str, Any]], summary: Dict[str, int], 
                          ref_mode: str, ref_path_mode: str, ref_tail_depth: int) -> str:
-    """Generate HTML vulnerability report"""
+    """Generate interactive HTML vulnerability report with filtering capabilities"""
     severity_colors = {
         "critical": "#dc2626",
         "high": "#ea580c", 
@@ -347,161 +522,461 @@ def generate_html_report(findings: List[Dict[str, Any]], summary: Dict[str, int]
         "info": "#0891b2",
         "unknown": "#6b7280"
     }
+    
+    # Convert findings to JSON for JavaScript
+    findings_json = json.dumps(findings, ensure_ascii=False, indent=None)
+    
     html_content = f"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Vulnerability Report - {human_now()}</title>
+<title>Interactive Vulnerability Report - {human_now()}</title>
 <style>
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; background: #f8fafc; }}
-  .container {{ max-width: 1200px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
+  * {{ box-sizing: border-box; }}
+  body {{ 
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+    margin: 0; padding: 20px; background: #f8fafc; line-height: 1.5;
+  }}
+  .container {{ max-width: 1400px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
   .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 8px 8px 0 0; }}
   .header h1 {{ margin: 0; font-size: 28px; font-weight: 600; }}
   .header .meta {{ margin-top: 8px; opacity: 0.9; }}
-  .summary {{ padding: 30px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
-  .summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 20px; }}
-  .summary-card {{ background: white; padding: 20px; border-radius: 8px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-  .summary-card .count {{ font-size: 24px; font-weight: 700; margin-bottom: 5px; }}
-  .summary-card .label {{ font-size: 12px; text-transform: uppercase; font-weight: 600; color: #64748b; }}
-  .content {{ padding: 30px; }}
-  .table-container {{ overflow-x: auto; }}
+  
+  .controls {{ padding: 20px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; }}
+  .control-group {{ display: flex; flex-direction: column; gap: 5px; }}
+  .control-group label {{ font-size: 12px; font-weight: 600; color: #475569; text-transform: uppercase; }}
+  .control-group input, .control-group select {{ 
+    padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;
+    background: white; transition: border-color 0.2s;
+  }}
+  .control-group input:focus, .control-group select:focus {{ 
+    outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  }}
+  .search-box {{ min-width: 250px; }}
+  .btn {{ 
+    padding: 8px 16px; background: #3b82f6; color: white; border: none; border-radius: 6px; 
+    cursor: pointer; font-size: 14px; font-weight: 500; transition: background-color 0.2s;
+  }}
+  .btn:hover {{ background: #2563eb; }}
+  .btn-secondary {{ background: #6b7280; }}
+  .btn-secondary:hover {{ background: #4b5563; }}
+  
+  .summary {{ padding: 20px 30px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
+  .summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 15px; }}
+  .summary-card {{ background: white; padding: 15px; border-radius: 6px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
+  .summary-card .count {{ font-size: 20px; font-weight: 700; margin-bottom: 5px; }}
+  .summary-card .label {{ font-size: 11px; text-transform: uppercase; font-weight: 600; color: #64748b; }}
+  
+  .content {{ padding: 0; }}
+  .table-container {{ overflow-x: auto; max-height: 70vh; }}
   table {{ width: 100%; border-collapse: collapse; }}
   th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #e2e8f0; }}
-  th {{ background: #f1f5f9; font-weight: 600; color: #475569; font-size: 14px; }}
-  .severity-badge {{ display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; color: white; }}
-  .tool-badge {{ background: #e2e8f0; color: #475569; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }}
-  .cve-link {{ color: #3b82f6; text-decoration: none; }}
+  th {{ 
+    background: #f1f5f9; font-weight: 600; color: #475569; font-size: 14px; 
+    position: sticky; top: 0; z-index: 10;
+  }}
+  tbody tr:hover {{ background: #f8fafc; }}
+  .severity-badge {{ 
+    display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 11px; 
+    font-weight: 600; text-transform: uppercase; color: white; min-width: 60px; text-align: center;
+  }}
+  .tool-badge {{ 
+    background: #e2e8f0; color: #475569; padding: 4px 8px; border-radius: 4px; 
+    font-size: 11px; font-weight: 500; display: inline-block;
+  }}
+  .cve-link {{ color: #3b82f6; text-decoration: none; font-weight: 500; }}
   .cve-link:hover {{ text-decoration: underline; }}
-  .ref-text {{ font-family: 'Monaco', 'Menlo', monospace; font-size: 12px; color: #64748b; }}
-  tr:hover {{ background: #f8fafc; }}
-  .empty-state {{ text-align: center; padding: 60px 20px; color: #64748b; }}
-  .empty-state .icon {{ font-size: 48px; margin-bottom: 16px; }}
+  .ref-text {{ 
+    font-family: 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 12px; 
+    color: #64748b; background: #f8fafc; padding: 4px 8px; border-radius: 4px; display: inline-block;
+  }}
+  .title-cell {{ max-width: 400px; word-wrap: break-word; }}
+  .no-results {{ 
+    text-align: center; padding: 60px 20px; color: #64748b; 
+    background: #f8fafc; margin: 20px;
+  }}
+  .stats {{ 
+    padding: 10px 30px; background: #f1f5f9; font-size: 14px; color: #64748b;
+    display: flex; justify-content: space-between; align-items: center;
+  }}
+  .highlight {{ background-color: #fef3c7; }}
+  
+  @media (max-width: 768px) {{
+    .controls {{ flex-direction: column; align-items: stretch; }}
+    .control-group {{ width: 100%; }}
+    .summary-grid {{ grid-template-columns: repeat(2, 1fr); }}
+  }}
 </style>
 </head>
 <body>
-  <div class="container"> 
-    <div class="header"> 
-      <h1>Vulnerability Report</h1>
-      <div class="meta">Generated on {human_now()}</div>
+<div class="container">
+  <div class="header">
+    <h1>Interactive Vulnerability Report</h1>
+    <div class="meta">Generated on {human_now()}</div>
+  </div>
+  
+  <div class="controls">
+    <div class="control-group">
+      <label>Search</label>
+      <input type="text" id="searchInput" class="search-box" placeholder="Search title, tool, CVE, component...">
     </div>
-    <div class="summary">
-      <div class="summary-grid">
-"""
-    # Add summary cards
-    total_findings = len(findings)
-    for severity in ["critical", "high", "medium", "low", "info", "unknown"]:
-        count = summary.get(severity, 0)
-        if count > 0 or severity in ["critical", "high", "medium"]:
-            color = severity_colors.get(severity, "#6b7280")
-            html_content += f"""
-        <div class="summary-card">
-          <div class="count" style="color: {color};">{count}</div>
-          <div class="label">{severity.upper()}</div>
-        </div>
-"""
-    html_content += f"""
-        <div class="summary-card">
-          <div class="count" style="color: #1f2937;">{total_findings}</div>
-          <div class="label">TOTAL</div>
-        </div>
-      </div>
+    <div class="control-group">
+      <label>Severity</label>
+      <select id="severityFilter">
+        <option value="">All Severities</option>
+        <option value="critical">Critical+</option>
+        <option value="high">High+</option>
+        <option value="medium">Medium+</option>
+        <option value="low">Low+</option>
+      </select>
     </div>
-    <div class="content">
-"""
-    if findings:
-        html_content += """
-      <div class="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>Tool</th>
-              <th>Severity</th>
-              <th>CVE</th>
-              <th>Title</th>
-              <th>Reference</th>
-            </tr>
-          </thead>
-          <tbody>
-"""
-        findings_sorted = sorted(findings, key=lambda x: (-SEV_ORDER.get(x.get("severity"), 0), x.get("cve", ""), x.get("tool", ""), x.get("title", "")))
-        severity_colors = {
-            "critical": "#dc2626",
-            "high": "#ea580c", 
-            "medium": "#d97706",
-            "low": "#65a30d",
-            "info": "#0891b2",
-            "unknown": "#6b7280"
-        }
-        for f in findings_sorted:
-            severity = f.get("severity", "unknown")
-            color = severity_colors.get(severity, "#6b7280")
-            ref_val = build_ref(f, ref_mode, ref_path_mode, ref_tail_depth)
-            cve_text = f.get("cve", "")
-            cve_display = ""
-            if cve_text:
-                if "," not in cve_text and cve_text.upper().startswith("CVE-"):
-                    cve_display = f'<a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name={cve_text}" class="cve-link" target="_blank" rel="noopener">{cve_text}</a>'
-                else:
-                    cve_display = cve_text
-            title = (f.get('title', '') or '').replace('<','&lt;').replace('>','&gt;')
-            ref_safe = (ref_val or '').replace('<','&lt;').replace('>','&gt;')
-            html_content += f"""
-            <tr>
-              <td><span class="tool-badge">{f.get('tool', '')}</span></td>
-              <td><span class="severity-badge" style="background-color: {color};">{severity.upper()}</span></td>
-              <td>{cve_display}</td>
-              <td>{title}</td>
-              <td><span class="ref-text">{ref_safe}</span></td>
-            </tr>
-"""
-        html_content += """
-          </tbody>
-        </table>
+    <div class="control-group">
+      <label>Tool</label>
+      <select id="toolFilter">
+        <option value="">All Tools</option>
+      </select>
+    </div>
+    <div class="control-group">
+      <label>Actions</label>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn" onclick="resetFilters()">Reset</button>
+        <button class="btn btn-secondary" onclick="exportResults()">Export</button>
       </div>
-"""
-    else:
-        html_content += """
-      <div class="empty-state"> 
-        <div class="icon">✅</div>
-        <h3>No vulnerabilities found</h3>
-        <p>All scanned files appear to be clean.</p>
-      </div>
-"""
-    html_content += """
     </div>
   </div>
+  
+  <div class="summary" id="summarySection">
+    <div class="summary-grid" id="summaryGrid"></div>
+  </div>
+  
+  <div class="stats" id="statsSection">
+    <span id="resultCount">Loading...</span>
+    <span id="filterStatus"></span>
+  </div>
+  
+  <div class="content">
+    <div class="table-container">
+      <table id="resultsTable">
+        <thead>
+          <tr>
+            <th style="width: 100px;">Tool</th>
+            <th style="width: 80px;">Severity</th>
+            <th style="width: 120px;">CVE</th>
+            <th style="min-width: 300px;">Title</th>
+            <th style="width: 200px;">Reference</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody">
+        </tbody>
+      </table>
+    </div>
+    <div class="no-results" id="noResults" style="display: none;">
+      <div style="font-size: 48px; margin-bottom: 16px;">🔍</div>
+      <h3>No vulnerabilities found</h3>
+      <p>Try adjusting your filters or search terms.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+const allFindings = {findings_json};
+let filteredFindings = [...allFindings];
+const severityColors = {json.dumps(severity_colors)};
+const severityOrder = {json.dumps(SEV_ORDER)};
+
+// Initialize the report
+document.addEventListener('DOMContentLoaded', function() {{
+  populateToolFilter();
+  updateDisplay();
+  setupEventListeners();
+}});
+
+function setupEventListeners() {{
+  document.getElementById('searchInput').addEventListener('input', debounce(applyFilters, 300));
+  document.getElementById('severityFilter').addEventListener('change', applyFilters);
+  document.getElementById('toolFilter').addEventListener('change', applyFilters);
+}}
+
+function debounce(func, wait) {{
+  let timeout;
+  return function executedFunction(...args) {{
+    const later = () => {{
+      clearTimeout(timeout);
+      func(...args);
+    }};
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  }};
+}}
+
+function populateToolFilter() {{
+  const tools = [...new Set(allFindings.map(f => f.tool).filter(t => t))].sort();
+  const toolSelect = document.getElementById('toolFilter');
+  
+  tools.forEach(tool => {{
+    const option = document.createElement('option');
+    option.value = tool;
+    option.textContent = tool;
+    toolSelect.appendChild(option);
+  }});
+}}
+
+function applyFilters() {{
+  const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+  const severityFilter = document.getElementById('severityFilter').value;
+  const toolFilter = document.getElementById('toolFilter').value;
+  
+  filteredFindings = allFindings.filter(finding => {{
+    // Search filter
+    if (searchTerm) {{
+      const searchableText = [
+        finding.title || '',
+        finding.tool || '',
+        finding.component || '',
+        finding.file || '',
+        finding.cve || '',
+        finding.id || ''
+      ].join(' ').toLowerCase();
+      
+      if (!searchableText.includes(searchTerm)) return false;
+    }}
+    
+    // Severity filter
+    if (severityFilter) {{
+      const findingSeverity = finding.severity || 'unknown';
+      const minLevel = severityOrder[severityFilter] || 0;
+      const currentLevel = severityOrder[findingSeverity] || 0;
+      if (currentLevel < minLevel) return false;
+    }}
+    
+    // Tool filter
+    if (toolFilter && finding.tool !== toolFilter) return false;
+    
+    return true;
+  }});
+  
+  updateDisplay();
+  updateFilterStatus();
+}}
+
+function updateDisplay() {{
+  updateSummary();
+  updateTable();
+  updateStats();
+}}
+
+function updateSummary() {{
+  const summary = {{ critical: 0, high: 0, medium: 0, low: 0, info: 0, unknown: 0 }};
+  
+  filteredFindings.forEach(f => {{
+    const sev = f.severity || 'unknown';
+    summary[sev] = (summary[sev] || 0) + 1;
+  }});
+  
+  const summaryGrid = document.getElementById('summaryGrid');
+  summaryGrid.innerHTML = '';
+  
+  ['critical', 'high', 'medium', 'low', 'info', 'unknown'].forEach(severity => {{
+    const count = summary[severity] || 0;
+    if (count > 0 || ['critical', 'high', 'medium'].includes(severity)) {{
+      const card = document.createElement('div');
+      card.className = 'summary-card';
+      const color = severityColors[severity] || '#6b7280';
+      card.innerHTML = `
+        <div class="count" style="color: ${{color}};">${{count}}</div>
+        <div class="label">${{severity.toUpperCase()}}</div>
+      `;
+      summaryGrid.appendChild(card);
+    }}
+  }});
+  
+  // Total card
+  const totalCard = document.createElement('div');
+  totalCard.className = 'summary-card';
+  totalCard.innerHTML = `
+    <div class="count" style="color: #1f2937;">${{filteredFindings.length}}</div>
+    <div class="label">TOTAL</div>
+  `;
+  summaryGrid.appendChild(totalCard);
+}}
+
+function updateTable() {{
+  const tableBody = document.getElementById('tableBody');
+  const noResults = document.getElementById('noResults');
+  
+  if (filteredFindings.length === 0) {{
+    tableBody.innerHTML = '';
+    noResults.style.display = 'block';
+    return;
+  }}
+  
+  noResults.style.display = 'none';
+  
+  // Sort findings by severity (descending), then by CVE, tool, title
+  const sortedFindings = [...filteredFindings].sort((a, b) => {{
+    const aSev = severityOrder[a.severity] || 0;
+    const bSev = severityOrder[b.severity] || 0;
+    if (aSev !== bSev) return bSev - aSev;
+    
+    const aCve = a.cve || '';
+    const bCve = b.cve || '';
+    if (aCve !== bCve) return aCve.localeCompare(bCve);
+    
+    const aTool = a.tool || '';
+    const bTool = b.tool || '';
+    if (aTool !== bTool) return aTool.localeCompare(bTool);
+    
+    const aTitle = a.title || '';
+    const bTitle = b.title || '';
+    return aTitle.localeCompare(bTitle);
+  }});
+  
+  tableBody.innerHTML = sortedFindings.map(finding => {{
+    const severity = finding.severity || 'unknown';
+    const severityColor = severityColors[severity] || '#6b7280';
+    
+    // Build reference
+    const ref = buildReference(finding);
+    
+    // CVE link
+    let cveDisplay = '';
+    if (finding.cve) {{
+      if (finding.cve.includes(',')) {{
+        cveDisplay = finding.cve;
+      }} else if (finding.cve.toUpperCase().startsWith('CVE-')) {{
+        cveDisplay = `<a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=${{finding.cve}}" class="cve-link" target="_blank" rel="noopener">${{finding.cve}}</a>`;
+      }} else {{
+        cveDisplay = finding.cve;
+      }}
+    }}
+    
+    return `
+      <tr>
+        <td><span class="tool-badge">${{escapeHtml(finding.tool || '')}}</span></td>
+        <td><span class="severity-badge" style="background-color: ${{severityColor}};">${{severity.toUpperCase()}}</span></td>
+        <td>${{cveDisplay}}</td>
+        <td class="title-cell">${{escapeHtml(finding.title || '')}}</td>
+        <td><span class="ref-text">${{escapeHtml(ref)}}</span></td>
+      </tr>
+    `;
+  }}).join('');
+}}
+
+function buildReference(finding) {{
+  const refMode = '{ref_mode}';
+  const refPathMode = '{ref_path_mode}';
+  const tailDepth = {ref_tail_depth};
+  
+  const component = (finding.component || '').trim();
+  const file = (finding.file || '').trim();
+  const line = finding.line;
+  
+  function formatPath(path) {{
+    if (!path) return '';
+    if (refPathMode === 'full') return path.replace(/\\\\/g, '/');
+    if (refPathMode === 'base') return path.replace(/\\\\/g, '/').split('/').pop();
+    // tail mode
+    const parts = path.replace(/\\\\/g, '/').split('/');
+    return parts.slice(-Math.min(tailDepth, parts.length)).join('/');
+  }}
+  
+  function fileLineRef() {{
+    const fp = file ? formatPath(file) : 'unknown';
+    return line ? `${{fp}}:${{line}}` : fp;
+  }}
+  
+  if (refMode === 'package') {{
+    return component || fileLineRef();
+  }}
+  if (refMode === 'fileline') {{
+    return fileLineRef();
+  }}
+  // auto mode
+  return component || fileLineRef();
+}}
+
+function updateStats() {{
+  const resultCount = document.getElementById('resultCount');
+  resultCount.textContent = `Showing ${{filteredFindings.length}} of ${{allFindings.length}} findings`;
+}}
+
+function updateFilterStatus() {{
+  const searchTerm = document.getElementById('searchInput').value;
+  const severityFilter = document.getElementById('severityFilter').value;
+  const toolFilter = document.getElementById('toolFilter').value;
+  
+  const filters = [];
+  if (searchTerm) filters.push(`search: "${{searchTerm}}"`);
+  if (severityFilter) filters.push(`severity: ${{severityFilter}}+`);
+  if (toolFilter) filters.push(`tool: ${{toolFilter}}`);
+  
+  const filterStatus = document.getElementById('filterStatus');
+  filterStatus.textContent = filters.length ? `Filtered by: ${{filters.join(', ')}}` : '';
+}}
+
+function resetFilters() {{
+  document.getElementById('searchInput').value = '';
+  document.getElementById('severityFilter').value = '';
+  document.getElementById('toolFilter').value = '';
+  applyFilters();
+}}
+
+function exportResults() {{
+  const data = {{
+    metadata: {{
+      generated_at: new Date().toISOString(),
+      generator: 'vuln_report.py (interactive)',
+      total_findings: filteredFindings.length,
+      exported_from_browser: true
+    }},
+    summary: calculateSummary(filteredFindings),
+    findings: filteredFindings
+  }};
+  
+  const blob = new Blob([JSON.stringify(data, null, 2)], {{ type: 'application/json' }});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `vuln-report-filtered-${{new Date().toISOString().split('T')[0]}}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}}
+
+function calculateSummary(findings) {{
+  const summary = {{ critical: 0, high: 0, medium: 0, low: 0, info: 0, unknown: 0 }};
+  findings.forEach(f => {{
+    const sev = f.severity || 'unknown';
+    summary[sev] = (summary[sev] || 0) + 1;
+  }});
+  
+  return {{
+    total_findings: findings.length,
+    by_severity: summary,
+    tools_used: [...new Set(findings.map(f => f.tool).filter(t => t))].sort(),
+    sources_scanned: [...new Set(findings.map(f => f.source).filter(s => s))].sort()
+  }};
+}}
+
+function escapeHtml(text) {{
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}}
+</script>
 </body>
 </html>
 """
+    
     return html_content
 
-def generate_json_report(findings: List[Dict[str, Any]], summary: Dict[str, int], metadata: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate JSON vulnerability report"""
-    return {
-        "metadata": {
-            "generated_at": datetime.datetime.now().isoformat(),
-            "generator": "vuln_report.py",
-            "version": "2.0",
-            **metadata
-        },
-        "summary": {
-            "total_findings": len(findings),
-            "by_severity": summary,
-            "tools_used": sorted(list(set(f.get("tool", "") for f in findings if f.get("tool")))),
-            "sources_scanned": sorted(list(set(f.get("source", "") for f in findings if f.get("source"))))
-        },
-        "findings": findings
-    }
-
-# ---------------- Core helpers ----------------
+# ---------------- Core helpers (enhanced) ----------------
 
 def _dedupe(findings: List[Dict[str, Any]], dedupe_cve: bool) -> List[Dict[str, Any]]:
-    """Dedupe findings, keeping the one with the highest severity rank.
-    - Always dedupe by full key (tool,id,title,component,file,line,cve)
-    - If dedupe_cve=True, also dedupe records that share (cve, component or id) to reduce noise
-    """
+    """Dedupe findings, keeping the one with the highest severity rank."""
     def sev_rank(f): return SEV_ORDER.get(f.get("severity"), 0)
 
     # exact key dedupe first
@@ -550,95 +1025,109 @@ def _summarize(findings: List[Dict[str, Any]]) -> Dict[str, int]:
         summary[s] = summary.get(s, 0) + 1
     return summary
 
-# ---------------- Main ----------------
+# ---------------- Enhanced Main Function ----------------
 
 def main(argv: List[str]) -> int:
-    files: List[str] = []
-    max_width = 120
-    color = True
-    include: List[str] = []
-    exclude: List[str] = []
-    only: set = set()
-    skip_empty = True
-    dedupe = True
-    dedupe_cve = True
-    ref_mode = "auto"
+    parser = argparse.ArgumentParser(
+        description='Enhanced Vulnerability Report Aggregator with Interactive Filtering',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  python vuln_report.py scan1.json scan2.json
+  python vuln_report.py *.json --output-html=report.html
+  python vuln_report.py results/ --interactive --min-severity=high
+  python vuln_report.py scan.json --only-tools=trivy,semgrep --include="SQL"
+        '''
+    )
+    
+    parser.add_argument('files', nargs='+', help='Input files to process')
+    parser.add_argument('--output-html', help='Export interactive HTML report')
+    parser.add_argument('--output-json', help='Export JSON report')
+    parser.add_argument('--quiet', '-q', action='store_true', help='Suppress console output')
+    parser.add_argument('--interactive', action='store_true', help='Enable interactive console filtering')
+    parser.add_argument('--ref-mode', choices=['auto', 'fileline', 'package'], default='auto', 
+                        help='Reference mode (default: auto)')
+    parser.add_argument('--ref-path', default='tail2', 
+                        help='Path format: full|base|tailN (default: tail2)')
+    parser.add_argument('--ref-width', type=int, help='Max width for reference column')
+    parser.add_argument('--only-tools', help='Filter by tools (comma-separated)')
+    parser.add_argument('--include', action='append', default=[], help='Include pattern (regex)')
+    parser.add_argument('--exclude', action='append', default=[], help='Exclude pattern (regex)')
+    parser.add_argument('--min-severity', choices=['critical', 'high', 'medium', 'low', 'info'], 
+                        help='Minimum severity level')
+    parser.add_argument('--no-color', action='store_true', help='Disable colored output')
+    parser.add_argument('--no-skip-empty', action='store_true', help='Don\'t skip empty findings')
+    parser.add_argument('--no-dedupe', action='store_true', help='Disable deduplication')
+    parser.add_argument('--no-dedupe-cve', action='store_true', help='Disable CVE/component deduplication')
+    parser.add_argument('--max-width', type=int, default=120, help='Max console width')
+
+    args = parser.parse_args(argv[1:])
+
+    # Process path mode
     ref_path_mode = "tail"
     ref_tail_depth = 2
-    ref_width: Optional[int] = None  # None => do not cut Ref
-    output_html: Optional[str] = None
-    output_json: Optional[str] = None
-    quiet = False
+    if args.ref_path == "full":
+        ref_path_mode = "full"
+    elif args.ref_path == "base":
+        ref_path_mode = "base"
+    elif args.ref_path.startswith("tail"):
+        ref_path_mode = "tail"
+        try:
+            ref_tail_depth = int(args.ref_path[4:]) if len(args.ref_path) > 4 else 2
+        except:
+            ref_tail_depth = 2
 
-    # --- parse args ---
-    for a in argv[1:]:
-        if a == "--no-color": color = False
-        elif a in ("--quiet", "-q"): quiet = True
-        elif a.startswith("--max-width="): max_width = int(a.split("=",1)[1])
-        elif a.startswith("--include="): include.append(a.split("=",1)[1])
-        elif a.startswith("--exclude="): exclude.append(a.split("=",1)[1])
-        elif a.startswith("--only-tools="): only = set(t.strip().lower() for t in a.split("=",1)[1].split(",") if t.strip())
-        elif a == "--no-skip-empty": skip_empty = False
-        elif a == "--no-dedupe": dedupe = False
-        elif a == "--no-dedupe-cve": dedupe_cve = False
-        elif a.startswith("--ref-mode="): ref_mode = a.split("=",1)[1].strip().lower()
-        elif a.startswith("--ref-path="):
-            val = a.split("=",1)[1].strip().lower()
-            if val == "full": ref_path_mode = "full"
-            elif val == "base": ref_path_mode = "base"
-            elif val.startswith("tail"):
-                ref_path_mode = "tail"
-                try:
-                    ref_tail_depth = int(val[4:]) if len(val) > 4 else 2
-                except: ref_tail_depth = 2
-        elif a.startswith("--ref-width="):
-            try: ref_width = int(a.split("=",1)[1])
-            except: ref_width = None
-        elif a.startswith("--output-html="): output_html = a.split("=",1)[1]
-        elif a.startswith("--output-json="): output_json = a.split("=",1)[1]
-        else:
-            files.append(a)
+    # Process tool filter
+    only_tools = set()
+    if args.only_tools:
+        only_tools = set(t.strip().lower() for t in args.only_tools.split(",") if t.strip())
 
-    _enable_color(color)
+    _enable_color(not args.no_color)
 
-    if not files:
-        print("Usage: python vuln_report.py <file1> [<file2> ...] [OPTIONS]")
-        print("\nOptions:")
-        print("  --output-html=FILE       Export HTML report")
-        print("  --output-json=FILE       Export JSON report")
-        print("  --quiet, -q              Suppress console output")
-        print("  --ref-mode=MODE          Reference mode: auto|fileline|package")
-        print("  --ref-path=MODE          Path format: full|base|tailN (e.g., tail2)")
-        print("  --ref-width=N            Max width for reference column")
-        print("  --only-tools=LIST        Filter by tools (comma-separated)")
-        print("  --include=PATTERN        Include pattern (regex)")
-        print("  --exclude=PATTERN        Exclude pattern (regex)")
-        print("  --no-color               Disable colored output")
-        print("  --no-skip-empty          Don't skip empty findings")
-        print("  --no-dedupe              Disable deduplication")
-        print("  --no-dedupe-cve          Disable CVE/component deduplication")
+    if not args.files:
+        parser.print_help()
         return 1
+
+    # Expand file patterns if needed
+    files = []
+    for pattern in args.files:
+        path = Path(pattern)
+        if path.is_file():
+            files.append(str(path))
+        elif path.is_dir():
+            # Scan directory for JSON files
+            json_files = list(path.glob("*.json")) + list(path.glob("*.sarif"))
+            files.extend(str(f) for f in json_files)
+        elif "*" in pattern:
+            # Handle glob patterns
+            from glob import glob
+            files.extend(glob(pattern))
+        else:
+            files.append(pattern)
 
     all_findings: List[Dict[str, Any]] = []
 
+    # Process files
     for fpath in files:
         p = Path(fpath)
         if not p.exists():
-            print(f"{YELLOW}Warning: file not found: {p}{RESET}")
+            if not args.quiet:
+                print(f"{YELLOW}Warning: file not found: {p}{RESET}")
             continue
         try:
             obj = load_json(p)
         except Exception as e:
-            print(f"{RED}Error: cannot parse JSON from {p}: {e}{RESET}")
+            if not args.quiet:
+                print(f"{RED}Error: cannot parse JSON from {p}: {e}{RESET}")
             continue
         fmt = detect_format(obj, p)
-        parser = PARSERS.get(fmt)
-        if not parser:
-            if not skip_empty and not quiet:
-                print_header(f"{p} — format: unknown (no findings)", max_width)
+        parser_func = PARSERS.get(fmt)
+        if not parser_func:
+            if not args.no_skip_empty and not args.quiet:
+                print_header(f"{p} — format: unknown (no findings)", args.max_width)
             continue
-        findings = list(parser(obj, str(p)))
-        if not findings and skip_empty:
+        findings = list(parser_func(obj, str(p)))
+        if not findings and not args.no_skip_empty:
             continue
         # annotate the raw source file path
         for it in findings:
@@ -646,72 +1135,90 @@ def main(argv: List[str]) -> int:
             it["severity"] = norm_sev(it.get("severity"))
         all_findings.extend(findings)
 
-    # filter by tool
-    if only:
-        all_findings = [f for f in all_findings if (f.get("tool","")).lower() in only]
+    # Apply basic filters
+    if only_tools:
+        all_findings = [f for f in all_findings if (f.get("tool","")).lower() in only_tools]
 
-    # apply include/exclude based on title or reference
-    if include or exclude:
+    if args.min_severity:
+        all_findings = filter_by_severity(all_findings, args.min_severity)
+
+    # Apply include/exclude patterns
+    if args.include or args.exclude:
         filtered: List[Dict[str,Any]] = []
         for f in all_findings:
-            ref = build_ref(f, ref_mode, ref_path_mode, ref_tail_depth)
+            ref = build_ref(f, args.ref_mode, ref_path_mode, ref_tail_depth)
             hay = f"{f.get('title','')} | {ref}"
-            if _match_filters(hay, include, exclude):
+            if _match_filters(hay, args.include, args.exclude):
                 filtered.append(f)
         all_findings = filtered
 
-    # deduplication
-    if dedupe:
-        all_findings = _dedupe(all_findings, dedupe_cve=dedupe_cve)
+    # Deduplication
+    if not args.no_dedupe:
+        all_findings = _dedupe(all_findings, dedupe_cve=not args.no_dedupe_cve)
 
-    # sort for output
-    all_findings.sort(key=lambda x: (-SEV_ORDER.get(x.get("severity"),0), x.get("cve",""), x.get("tool",""), x.get("title","")))
+    # Interactive mode
+    if args.interactive and not args.quiet:
+        all_findings = interactive_filter_menu(all_findings, args.ref_mode, ref_path_mode, 
+                                             ref_tail_depth, args.max_width)
 
-    # summary
+    # Sort for output
+    all_findings.sort(key=lambda x: (-SEV_ORDER.get(x.get("severity"),0), 
+                                   x.get("cve",""), x.get("tool",""), x.get("title","")))
+
+    # Summary
     summary = _summarize(all_findings)
 
-    # console output
-    if not quiet:
-        header = f"Aggregated Vulnerability Report • {human_now()}"
-        print_header(header, max_width)
+    # Console output
+    if not args.quiet:
+        header = f"Enhanced Vulnerability Report • {human_now()}"
+        print_header(header, args.max_width)
         sev_line = f"CRITICAL:{summary['critical']} HIGH:{summary['high']} MEDIUM:{summary['medium']} LOW:{summary['low']} INFO:{summary['info']}"
         print(sev_line)
         print()
-        rows: List[Tuple[str,str,str,str,str]] = []
-        for f in all_findings:
-            ref_val = build_ref(f, ref_mode, ref_path_mode, ref_tail_depth)
-            if ref_width:
-                ref_val = cut(ref_val, ref_width)
-            rows.append((
-                f.get("tool",""),
-                (f.get("severity") or "").upper(),
-                f.get("cve",""),
-                f.get("title",""),
-                ref_val
-            ))
-        if rows:
-            table(rows, ["Tool","Severity","CVE","Title"], max_width)
+        
+        if all_findings:
+            show_findings_table(all_findings, args.ref_mode, ref_path_mode, ref_tail_depth, args.max_width)
         else:
             print(f"{GREEN}No findings after filters.{RESET}")
 
-    # outputs
-    if output_html:
-        html = generate_html_report(all_findings, summary, ref_mode, ref_path_mode, ref_tail_depth)
-        Path(output_html).write_text(html, encoding="utf-8")
-        if not quiet:
-            print(f"\n{GREEN}HTML report saved to: {output_html}{RESET}")
+    # Export outputs
+    if args.output_html:
+        html = generate_html_report(all_findings, summary, args.ref_mode, ref_path_mode, ref_tail_depth)
+        Path(args.output_html).write_text(html, encoding="utf-8")
+        if not args.quiet:
+            print(f"\n{GREEN}Interactive HTML report saved to: {args.output_html}{RESET}")
 
-    if output_json:
+    if args.output_json:
         meta = {
-            "arguments": [a for a in argv[1:]],
-            "ref_mode": ref_mode,
+            "arguments": argv[1:],
+            "ref_mode": args.ref_mode,
             "ref_path_mode": ref_path_mode,
             "ref_tail_depth": ref_tail_depth,
+            "filters_applied": {
+                "min_severity": args.min_severity,
+                "only_tools": list(only_tools),
+                "include_patterns": args.include,
+                "exclude_patterns": args.exclude
+            }
         }
-        j = generate_json_report(all_findings, summary, meta)
-        Path(output_json).write_text(json.dumps(j, ensure_ascii=False, indent=2), encoding="utf-8")
-        if not quiet:
-            print(f"{GREEN}JSON report saved to: {output_json}{RESET}")
+        json_data = {
+            "metadata": {
+                "generated_at": datetime.datetime.now().isoformat(),
+                "generator": "vuln_report.py",
+                "version": "2.1",
+                **meta
+            },
+            "summary": {
+                "total_findings": len(all_findings),
+                "by_severity": summary,
+                "tools_used": sorted(list(set(f.get("tool", "") for f in all_findings if f.get("tool")))),
+                "sources_scanned": sorted(list(set(f.get("source", "") for f in all_findings if f.get("source"))))
+            },
+            "findings": all_findings
+        }
+        Path(args.output_json).write_text(json.dumps(json_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        if not args.quiet:
+            print(f"{GREEN}JSON report saved to: {args.output_json}{RESET}")
 
     return 0
 
